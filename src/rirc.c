@@ -210,6 +210,13 @@ startup(void)
 
 	srand(time(NULL));
 
+#ifdef WITH_SSL
+	OpenSSL_add_all_algorithms();
+	ERR_load_crypto_strings();
+	SSL_load_error_strings();
+	SSL_library_init();
+#endif
+
 	/* Initialize submodules */
 	init_mesg();
 	init_state();

@@ -4,6 +4,14 @@
 #include <time.h>
 #include <errno.h>
 
+#ifdef WITH_SSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#ifdef MAX_INPUT
+#undef MAX_INPUT
+#endif
+#endif
+
 #define VERSION "0.1"
 
 #define SCROLLBACK_BUFFER 200
@@ -177,6 +185,10 @@ typedef struct server
 	char *port;
 	char usermodes[MODE_SIZE];
 	int soc;
+#ifdef WITH_SSL
+	SSL_CTX *ctx;
+	SSL *ssl;
+#endif
 	int pinging;
 	struct avl_node *ignore;
 	struct channel *channel;

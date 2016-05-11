@@ -1,7 +1,7 @@
 CC = cc
-CFLAGS       = -std=c99 -Wall -Wextra -pedantic -O2
-CFLAGS_DEBUG = -std=c99 -Wall -Wextra -pedantic -O0 -g -DDEBUG
-LDFLAGS      = -pthread
+CFLAGS       = -DWITH_SSL -std=c99 -Wall -Wextra -pedantic -O2
+CFLAGS_DEBUG = -DWITH_SSL -std=c99 -Wall -Wextra -pedantic -O0 -g -DDEBUG
+LDFLAGS      = -pthread -lssl -lcrypto
 
 # If using gcc for debug and sanitization, eg:
 #   > make -e CC=gcc debug

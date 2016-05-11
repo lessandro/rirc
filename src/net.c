@@ -35,6 +35,10 @@
 typedef struct connection_thread {
 	int socket;
 	int socket_tmp;
+#ifdef WITH_SSL
+	SSL_CTX *ctx;
+	SSL *ssl;
+#endif
 	char *host;
 	char *port;
 	char error[MAX_ERROR];
@@ -76,6 +80,10 @@ new_server(char *host, char *port)
 
 	/* Set non-zero default fields */
 	s->soc = -1;
+#ifdef WITH_SSL
+	s->ctx = NULL;
+	s->ssl = NULL;
+#endif
 	s->iptr = s->input;
 	s->nptr = config.nicks;
 	s->host = strdup(host);
@@ -116,10 +124,10 @@ sendf(char *err, server *s, const char *fmt, ...)
 	 */
 
 	char sendbuff[BUFFSIZE];
-	int soc, len;
+	int len;
 	va_list ap;
 
-	if (s == NULL || (soc = s->soc) < 0) {
+	if (s == NULL || s->soc < 0) {
 		strncpy(err, "Error: Not connected to server", MAX_ERROR);
 		return 1;
 	}
@@ -127,6 +135,9 @@ sendf(char *err, server *s, const char *fmt, ...)
 	va_start(ap, fmt);
 	len = vsnprintf(sendbuff, BUFFSIZE-2, fmt, ap);
 	va_end(ap);
+
+	if (len == 0)
+		return 0;
 
 	if (len < 0) {
 		strncpy(err, "Error: Invalid message format", MAX_ERROR);
@@ -145,10 +156,16 @@ sendf(char *err, server *s, const char *fmt, ...)
 	sendbuff[len++] = '\r';
 	sendbuff[len++] = '\n';
 
-	if (send(soc, sendbuff, len, 0) < 0) {
+#ifdef WITH_SSL
+	if (SSL_write(s->ssl, sendbuff, len) < 0) {
+		ERR_error_string_n(ERR_get_error(), err, MAX_ERROR);
+	}
+#else
+	if (send(s->soc, sendbuff, len, 0) < 0) {
 		snprintf(err, MAX_ERROR, "Error: %s", strerror(errno));
 		return 1;
 	}
+#endif
 
 	return 0;
 }
@@ -187,6 +204,10 @@ server_connect(char *host, char *port)
 
 	ct->socket = -1;
 	ct->socket_tmp = -1;
+#ifdef WITH_SSL
+	ct->ctx = NULL;
+	ct->ssl = NULL;
+#endif
 	ct->host = s->host;
 	ct->port = s->port;
 
@@ -215,6 +236,11 @@ connected(server *s)
 
 	s->soc = ct->socket;
 
+#ifdef WITH_SSL
+	s->ssl = ct->ssl;
+	s->ctx = ct->ctx;
+#endif
+
 	/* Set reconnect parameters to 0 in case this was an auto-reconnect */
 	s->reconnect_time = 0;
 	s->reconnect_delta = 0;
@@ -228,6 +254,30 @@ connected(server *s)
 	//FIXME: should the server send nick as is? compare the nick when it's received?
 	//or should auto_nick take a server argument and write to a buffer of NICKSIZE length?
 }
+
+#ifdef WITH_SSL
+static int
+ssl_connect(connection_thread *ct)
+{
+	const SSL_METHOD *method = SSLv23_client_method();
+
+	ct->ctx = SSL_CTX_new(method);
+	if (ct->ctx == NULL)
+		return -1;
+
+	ct->ssl = SSL_new(ct->ctx);
+	if (ct->ssl == NULL)
+		return -1;
+
+	if (SSL_set_fd(ct->ssl, ct->socket_tmp) != 1)
+		return -1;
+
+	if (SSL_connect(ct->ssl) != 1)
+		return -1;
+
+	return 0;
+}
+#endif
 
 static void*
 threaded_connect(void *arg)
@@ -270,6 +320,13 @@ threaded_connect(void *arg)
 		strerror_r(errno, ct->error, MAX_ERROR);
 		pthread_exit(NULL);
 	}
+
+#ifdef WITH_SSL
+	if (ssl_connect(ct) != 0) {
+		ERR_error_string_n(ERR_get_error(), ct->error, MAX_ERROR);
+		pthread_exit(NULL);
+	}
+#endif
 
 	/* Failing to get the numeric IP isn't a fatal connection error */
 	if ((ret = getnameinfo(p->ai_addr, p->ai_addrlen, ct->ipstr,
@@ -324,6 +381,8 @@ server_disconnect(server *s, int err, int kill, char *mesg)
 		/* There's a chance the thread is canceled with an open socket */
 		if (ct->socket_tmp)
 			close(ct->socket_tmp);
+
+
 
 		free(ct);
 		s->connecting = NULL;
@@ -513,7 +572,11 @@ check_socket(server *s, time_t t)
 	char recv_buff[BUFFSIZE];
 
 	/* Consume all input on the socket */
+#ifdef WITH_SSL
+	while (s->soc >= 0 && (count = SSL_read(s->ssl, recv_buff, BUFFSIZE)) >= 0) {
+#else
 	while (s->soc >= 0 && (count = read(s->soc, recv_buff, BUFFSIZE)) >= 0) {
+#endif
 
 		if (count == 0) {
 			server_disconnect(s, 1, 0, "Remote hangup");
